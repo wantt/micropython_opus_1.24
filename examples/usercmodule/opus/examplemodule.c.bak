@@ -1,0 +1,143 @@
+/*
+ref:
+    http://124.223.103.23/index.php/archives/esp32-opus.html
+    https://chatgpt.com/share/6709e6f0-8bc4-8003-a750-59179595c871
+    micropython 形参设置: https://chatgpt.com/c/670d0b2e-cb20-8003-ad0f-6ac80f9a682c
+*/
+#include "py/runtime.h"
+#include "py/mphal.h"
+#include "py/misc.h"
+#include "py/objarray.h"
+
+#include <stdio.h>
+#include <stdbool.h>
+#include <opus.h>
+
+#define MAX_PACKET_SIZE 1276
+
+void check_error(int error) {
+    if (error != OPUS_OK) {
+        fprintf(stderr, "Opus error: %s\n", opus_strerror(error));
+        exit(EXIT_FAILURE);
+    }
+}
+
+static OpusDecoder *decoder_handle = NULL;
+int setup_decoder(int32_t sample_rate,int channels){
+    int err = 0;
+    decoder_handle = opus_decoder_create(sample_rate, channels, &err);
+    check_error(err);
+    return err;
+}
+
+int destroy_decoder(){
+     opus_decoder_destroy(decoder_handle); 
+    return 0;
+}
+
+int decoder(unsigned char encoded_data[], int nb_bytes, short out_pcm[],int frame_size){
+    return opus_decode(decoder_handle, encoded_data, nb_bytes, out_pcm, frame_size, 0);
+}
+
+static OpusEncoder *encoder_handle = NULL;
+
+int setup_encoder( 
+    int32_t sample_rate, // 16000
+    int channels, // 1
+    int32_t bitrate, // 24000
+    int complexity, // 0
+    int frame_duration, // 5003= 10ms 5004=20ms  5005=40ms
+    int application_type  // 2049=audio, 2048=voip
+    ){
+    int err = 0;
+    if(!encoder_handle){
+        encoder_handle = opus_encoder_create(sample_rate, channels, application_type, &err);
+        check_error(err);
+        opus_encoder_ctl(encoder_handle, OPUS_SET_BITRATE(bitrate));
+        opus_encoder_ctl(encoder_handle, OPUS_SET_COMPLEXITY(complexity));
+        opus_encoder_ctl(encoder_handle, OPUS_SET_EXPERT_FRAME_DURATION(frame_duration));
+    }
+    return 0;
+}
+
+int destroy_encoder(){
+    opus_encoder_destroy(encoder_handle);
+    return 0;
+}
+
+int encoder(short in_pcm[],int frame_len,unsigned char encoded_data[]){
+    return opus_encode(encoder_handle, in_pcm, frame_len, encoded_data, MAX_PACKET_SIZE);
+}
+
+mp_obj_t uencode(size_t n_args, const mp_obj_t *args){
+    mp_obj_array_t *mp_in_array = MP_OBJ_TO_PTR(args[0]); // in_pcm
+    int16_t *in_pcm = (int16_t*) mp_in_array->items;
+    int frame_len = (int)mp_obj_get_int(args[1]);
+    mp_obj_array_t *mp_encoded_array = MP_OBJ_TO_PTR(args[2]);
+    unsigned char *encoded_data = (unsigned char*) mp_encoded_array->items;
+    return MP_OBJ_FROM_PTR(mp_obj_new_int( encoder(in_pcm, frame_len, encoded_data)));
+}
+
+mp_obj_t udecode(size_t n_args, const mp_obj_t *args){
+    mp_obj_array_t *mp_encode_array = MP_OBJ_TO_PTR(args[0]); 
+    unsigned char * encoded_data = (unsigned char *)mp_encode_array->items;
+    int nb_bytes = (int)mp_obj_get_int(args[1]);
+    mp_obj_array_t *mp_in_array = MP_OBJ_TO_PTR(args[2]); // encoded_data
+    short *out_pcm = (short*) mp_in_array->items;
+    int frame_size = (int)mp_obj_get_int(args[3]);
+    return MP_OBJ_FROM_PTR( mp_obj_new_int(   decoder( encoded_data, nb_bytes, out_pcm, frame_size)   ));
+}
+
+mp_obj_t mp_setup_encoder(size_t n_args, const mp_obj_t *args){
+    int32_t sample_rate = (int32_t)mp_obj_get_int(args[0]);
+    int channels = (int)mp_obj_get_int(args[1]);
+    int32_t bitrate = (int32_t)mp_obj_get_int(args[2]);
+    int complexity = (int)mp_obj_get_int(args[3]);
+    int frame_duration = (int)mp_obj_get_int(args[4]);
+    int application_type = (int)mp_obj_get_int(args[5]);
+    return MP_OBJ_FROM_PTR( mp_obj_new_int(  setup_encoder(sample_rate,channels,bitrate,complexity,frame_duration,application_type) ));
+}
+
+mp_obj_t mp_setup_decoder(size_t n_args, const mp_obj_t *args){
+    int32_t sample_rate = (int32_t)mp_obj_get_int(args[0]);
+    int channels = (int)mp_obj_get_int(args[1]);
+    return MP_OBJ_FROM_PTR( mp_obj_new_int(  setup_decoder(sample_rate,channels) ));
+}
+
+mp_obj_t mp_destroy_encoder(size_t n_args, const mp_obj_t *args){
+    return MP_OBJ_FROM_PTR( mp_obj_new_int(  destroy_encoder() ));
+}
+mp_obj_t mp_destroy_decoder(size_t n_args, const mp_obj_t *args){
+    return MP_OBJ_FROM_PTR( mp_obj_new_int(  destroy_decoder() ));
+}
+
+
+static MP_DEFINE_CONST_FUN_OBJ_VAR(example_mp_destroy_encoder, 0, mp_destroy_encoder);
+static MP_DEFINE_CONST_FUN_OBJ_VAR(example_mp_destroy_decoder, 0, mp_destroy_decoder);
+
+static MP_DEFINE_CONST_FUN_OBJ_VAR(example_mp_setup_encoder, 0, mp_setup_encoder);
+static MP_DEFINE_CONST_FUN_OBJ_VAR(example_mp_setup_decoder, 0, mp_setup_decoder);
+
+
+static MP_DEFINE_CONST_FUN_OBJ_VAR(example_decode, 0, udecode);
+static MP_DEFINE_CONST_FUN_OBJ_VAR(example_encode, 0, uencode);
+static const mp_rom_map_elem_t example_module_globals_table[] = {
+    { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_opus) },
+    { MP_ROM_QSTR(MP_QSTR_decode), MP_ROM_PTR(&example_decode) },
+    { MP_ROM_QSTR(MP_QSTR_encode), MP_ROM_PTR(&example_encode) },
+    { MP_ROM_QSTR(MP_QSTR_destroy_encoder), MP_ROM_PTR(&example_mp_destroy_encoder) },
+    { MP_ROM_QSTR(MP_QSTR_destroy_decoder), MP_ROM_PTR(&example_mp_destroy_decoder) },
+
+    { MP_ROM_QSTR(MP_QSTR_setup_encoder), MP_ROM_PTR(&example_mp_setup_encoder) },
+    { MP_ROM_QSTR(MP_QSTR_setup_decoder), MP_ROM_PTR(&example_mp_setup_decoder) },
+};
+static MP_DEFINE_CONST_DICT(example_module_globals, example_module_globals_table);
+
+// Define module object.
+const mp_obj_module_t example_user_cmodule = {
+    .base = { &mp_type_module },
+    .globals = (mp_obj_dict_t *)&example_module_globals,
+};
+
+// Register the module to make it available in Python.
+MP_REGISTER_MODULE(MP_QSTR_opus, example_user_cmodule);

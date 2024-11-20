@@ -1,0 +1,152 @@
+/*
+ref:
+    http://124.223.103.23/index.php/archives/esp32-opus.html
+    https://chatgpt.com/share/6709e6f0-8bc4-8003-a750-59179595c871
+    micropython 形参设置: https://chatgpt.com/c/670d0b2e-cb20-8003-ad0f-6ac80f9a682c
+*/
+#include "py/runtime.h"
+#include "py/mphal.h"
+#include "py/misc.h"
+#include "py/objarray.h"
+
+#include <stdio.h>
+#include <stdbool.h>
+#include "opus/include/opus.h"
+
+#define FRAME_SIZE 960
+#define SAMPLE_RATE 16000
+#define CHANNELS 1
+#define APPLICATION OPUS_APPLICATION_AUDIO
+#define BITRATE 20000
+#define MAX_PACKET_SIZE 1276*2
+#define MAX_FRAME_SIZE 2*960
+// #define MAX_PACKET_SIZE (3*1276)
+void check_error(int error) {
+    if (error != OPUS_OK) {
+        fprintf(stderr, "Opus error: %s\n", opus_strerror(error));
+        exit(EXIT_FAILURE);
+    }
+}
+
+int decoder(unsigned char encoded_data[], int nb_bytes, short out_pcm[], int32_t sample_rate, bool is_final){
+    static OpusDecoder *decoder = NULL;
+    static int err = 0;
+    if(!decoder){
+        decoder = opus_decoder_create(sample_rate, 1, &err);
+        check_error(err);
+    }
+    if(is_final){
+       opus_decoder_destroy(decoder); 
+    }
+    return opus_decode(decoder, encoded_data, nb_bytes, out_pcm, MAX_FRAME_SIZE, 0);
+}
+
+int encoder(short in_pcm[],int frame_len,unsigned char encoded_data[], int32_t sample_rate, int bitrate, bool is_final){
+    static int err = 0;
+    static OpusEncoder *encoder = NULL;
+    if(!encoder){
+        encoder = opus_encoder_create(sample_rate, CHANNELS, APPLICATION, &err);
+        check_error(err);
+        opus_encoder_ctl(encoder, OPUS_SET_BITRATE(bitrate));
+    }
+    if(is_final){
+        opus_encoder_destroy(encoder);
+    }
+    return opus_encode(encoder, in_pcm, frame_len, encoded_data, MAX_PACKET_SIZE);
+}
+
+void speex_app_main(void)
+{
+    OpusEncoder *encoder;
+    OpusDecoder *decoder;
+    int err = 0;
+    encoder = opus_encoder_create(SAMPLE_RATE, CHANNELS, APPLICATION, &err);
+    check_error(err);
+    opus_encoder_ctl(encoder, OPUS_SET_BITRATE(BITRATE));
+
+
+    decoder = opus_decoder_create(SAMPLE_RATE, CHANNELS, &err);
+    check_error(err);
+
+    short in_pcm[FRAME_SIZE];
+    // memset(in_pcm, 0, sizeof(in_pcm));  // 填充一些数据作为示例
+    unsigned char encoded_data[MAX_PACKET_SIZE];
+
+
+    // 编码
+    int nb_bytes = opus_encode(encoder, in_pcm, FRAME_SIZE, encoded_data, MAX_PACKET_SIZE);
+    if (nb_bytes < 0) {
+        fprintf(stderr, "Opus encoding failed: %s\n", opus_strerror(nb_bytes));
+        exit(EXIT_FAILURE);
+    }
+    printf("Encoded %d bytes.\n", nb_bytes);
+
+
+
+    // 解码后的PCM输出数据
+    short out_pcm[FRAME_SIZE];
+
+    // 解码
+    int frame_size = opus_decode(decoder, encoded_data, nb_bytes, out_pcm, FRAME_SIZE, 0);
+    if (frame_size < 0) {
+        fprintf(stderr, "Opus decoding failed: %s\n", opus_strerror(frame_size));
+        exit(EXIT_FAILURE);
+    }
+    printf("Decoded %d samples.\n", frame_size);
+
+    // 清理资源
+    opus_encoder_destroy(encoder);
+    opus_decoder_destroy(decoder);
+
+    // return 0;
+
+}
+
+mp_obj_t uencode(size_t n_args, const mp_obj_t *args){
+    mp_obj_array_t *mp_in_array = MP_OBJ_TO_PTR(args[0]); // in_pcm
+    int16_t *in_pcm = (int16_t*) mp_in_array->items;
+    int frame_len = (int)mp_obj_get_int(args[1]);
+    mp_buffer_info_t bufinfo;
+    if (!mp_get_buffer(args[2], &bufinfo, MP_BUFFER_READ)) {
+        mp_raise_TypeError("expected a bytes or bytearray object");
+    }
+    int32_t sample_rate = (int32_t)mp_obj_get_int(args[3]);
+    int bitrate = (int)mp_obj_get_int(args[4]);
+    bool is_final = mp_obj_is_true(args[5]);
+    return MP_OBJ_FROM_PTR(mp_obj_new_int(encoder(in_pcm, frame_len, (unsigned char*)bufinfo.buf, sample_rate, bitrate, is_final)));
+
+}
+
+mp_obj_t udecode(size_t n_args, const mp_obj_t *args){
+    mp_buffer_info_t bufinfo;
+    if (!mp_get_buffer(args[0], &bufinfo, MP_BUFFER_READ)) {
+        mp_raise_TypeError("expected a bytes or bytearray object");
+    }
+    int nb_bytes = (int)mp_obj_get_int(args[1]);
+    mp_obj_array_t *mp_in_array = MP_OBJ_TO_PTR(args[2]); // encoded_data
+    int16_t *out_pcm = (int16_t*) mp_in_array->items;
+    int32_t sample_rate = (int32_t)mp_obj_get_int(args[3]);
+    bool is_final = mp_obj_is_true(args[4]);
+    return MP_OBJ_FROM_PTR(mp_obj_new_int(decoder((unsigned char*)bufinfo.buf, nb_bytes, out_pcm, sample_rate, is_final)));
+
+}
+
+static MP_DEFINE_CONST_FUN_OBJ_VAR(example_decode, 0, uencode);
+
+static MP_DEFINE_CONST_FUN_OBJ_VAR(example_encode, 0, udecode);
+
+static const mp_rom_map_elem_t example_module_globals_table[] = {
+    { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_opus) },
+    { MP_ROM_QSTR(MP_QSTR_decode), MP_ROM_PTR(&example_decode) },
+    { MP_ROM_QSTR(MP_QSTR_encode), MP_ROM_PTR(&example_encode) },
+};
+static MP_DEFINE_CONST_DICT(example_module_globals, example_module_globals_table);
+
+// Define module object.
+const mp_obj_module_t example_user_cmodule = {
+    .base = { &mp_type_module },
+    .globals = (mp_obj_dict_t *)&example_module_globals,
+};
+
+// Register the module to make it available in Python.
+MP_REGISTER_MODULE(MP_QSTR_opus, example_user_cmodule);

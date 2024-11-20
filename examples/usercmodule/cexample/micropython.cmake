@@ -9,6 +9,7 @@ target_sources(usermod_cexample INTERFACE
 # Add the current directory as an include directory.
 target_include_directories(usermod_cexample INTERFACE
     ${CMAKE_CURRENT_LIST_DIR}
+    ${OPUS_GLOBAL_DIR}/include/
 )
 
 # Link our INTERFACE library to the usermod target.
