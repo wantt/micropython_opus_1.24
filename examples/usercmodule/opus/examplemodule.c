@@ -49,7 +49,10 @@ int32_t encoder(short in_pcm[],int frame_len,unsigned char encoded_data[], int32
         // opus_encoder_ctl(encoder_handle, OPUS_SET_VBR(1));
         opus_encoder_ctl(encoder_handle, OPUS_SET_COMPLEXITY(complexity));
         opus_encoder_ctl(encoder_handle, OPUS_SET_EXPERT_FRAME_DURATION(frame_duration));
-        // opus_encoder_ctl(encoder_handle, OPUS_SET_FORCE_MODE(MODE_CELT_ONLY)); 
+        // opus_encoder_ctl(encoder_handle, OPUS_SET_FORCE_MODE(MODE_CELT_ONLY));
+	//opus_encoder_ctl(encoder_handle, OPUS_SET_INBAND_FEC(1));  // 启用 Inband FEC
+        // 设置丢包率为10%
+        //opus_encoder_ctl(encoder_handle, OPUS_SET_PACKET_LOSS_PERC(10));   
     }
     if(is_final) return  (int32_t) opus_encoder_ctl(encoder_handle, OPUS_RESET_STATE);
     return opus_encode(encoder_handle, in_pcm, frame_len, encoded_data, MAX_PACKET_SIZE);
